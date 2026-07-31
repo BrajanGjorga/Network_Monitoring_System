@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Iterable, Optional, Sequence, Union
 
 import numpy as np
@@ -8,10 +6,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-
+"""In this file i have created some functions that will help in the 
+preprocessing of the data. These functions will be used in the training 
+workflow to prepare the data for model training and evaluation."""
 
 def clean_column_names(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Remove surrounding whitespace from column names."""
     cleaned = dataframe.copy()
     cleaned.columns = [str(column).strip() for column in cleaned.columns]
     return cleaned
@@ -22,7 +21,6 @@ def detect_label_column(
     label_column: Optional[str] = None,
     candidates: Optional[Sequence[str]] = None,
 ) -> str:
-    """Safely detect the label column from a dataframe."""
     cleaned = clean_column_names(dataframe)
     normalized_columns = {str(column).strip().lower(): column for column in cleaned.columns}
 
@@ -54,7 +52,6 @@ def select_feature_columns(
     label_column: str,
     metadata_columns: Optional[Iterable[str]] = None,
 ) -> list[str]:
-    """Select the model input columns while excluding metadata and labels."""
     cleaned = clean_column_names(dataframe)
     metadata = {str(column).strip() for column in (metadata_columns or [])}
     metadata.update({"Flow ID", "Source IP", "Destination IP", "Timestamp"})
@@ -134,7 +131,6 @@ def prepare_single_record(
     metadata_columns: Optional[Iterable[str]] = None,
     preprocessor: Optional[Pipeline] = None,
 ):
-    """Prepare one record exactly as the training workflow expects."""
     if isinstance(record, pd.Series):
         row = record.to_dict()
     elif isinstance(record, dict):
