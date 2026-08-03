@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 from alert_sender import AlertSender
 from capture import CaptureManager
 from cicflow_runner import CICFlowRunner
@@ -14,8 +16,16 @@ from predictor import Predictor
 from state import StateStore
 
 
+def resolve_path(path: str) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    return (PROJECT_ROOT / candidate).resolve()
+
+
 def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as handle:
+    config_path = resolve_path(path)
+    with config_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -72,7 +82,8 @@ def process_pcap_file(pcap_path: str, config: dict, logger: logging.Logger, stat
 
 
 def validate_model(config: dict, logger: logging.Logger) -> bool:
-    predictor = Predictor(model_dir=config.get("model_dir", "model"), logger=logger)
+    model_dir = resolve_path(config.get("model_dir", "model"))
+    predictor = Predictor(model_dir=str(model_dir), logger=logger)
     return predictor.validate()
 
 
@@ -99,20 +110,20 @@ def main() -> None:
 
     config = load_config(args.config)
     logger = configure_logging(config.get("log_level", "INFO"))
-    logger.info("Loaded configuration from %s", args.config)
+    logger.info("Loaded configuration from %s", resolve_path(args.config))
 
     if args.validate_config:
         sys.exit(0 if validate_config(config, logger) else 1)
     if args.validate_model:
         sys.exit(0 if validate_model(config, logger) else 1)
 
-    predictor = Predictor(model_dir=config.get("model_dir", "model"), logger=logger)
+    predictor = Predictor(model_dir=str(resolve_path(config.get("model_dir", "model"))), logger=logger)
     if not predictor.validate():
         logger.error("Model artifacts could not be validated")
         sys.exit(1)
 
-    alert_sender = AlertSender(endpoint_url=config.get("alert_endpoint_url", "http://127.0.0.1:8001/alerts"), db_path="data/alerts.sqlite", timeout=config.get("http_timeout_seconds", 3), max_retries=config.get("retry_count", 3), backoff_seconds=config.get("retry_backoff_seconds", 1.0), logger=logger)
-    state = StateStore(db_path="data/state.sqlite")
+    alert_sender = AlertSender(endpoint_url=config.get("alert_endpoint_url", "http://127.0.0.1:8001/alerts"), db_path=str(resolve_path("data/alerts.sqlite")), timeout=config.get("http_timeout_seconds", 3), max_retries=config.get("retry_count", 3), backoff_seconds=config.get("retry_backoff_seconds", 1.0), logger=logger)
+    state = StateStore(db_path=str(resolve_path("data/state.sqlite")))
 
     if args.process_pcap:
         process_pcap_file(args.process_pcap, config, logger, state, predictor, alert_sender)
@@ -125,7 +136,7 @@ def main() -> None:
         return
 
     while True:
-        pcap_dir = Path(config.get("pcap_output_dir", "data/pcaps"))
+        pcap_dir = resolve_path(config.get("pcap_output_dir", "data/pcaps"))
         completed_pcaps = []
         for pcap_path in pcap_dir.glob("*.pcap"):
             if not state.is_pcap_processed(str(pcap_path)):

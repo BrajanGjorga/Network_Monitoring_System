@@ -44,6 +44,10 @@ class TestAgentLogic(unittest.TestCase):
             predictor = Predictor(model_dir=str(model_path))
             self.assertFalse(predictor.is_ready)
 
+    def test_relative_model_path_is_resolved_from_project_root(self):
+        predictor = Predictor(model_dir="model")
+        self.assertTrue(predictor.is_ready)
+
     def test_dangerous_label_detection(self):
         self.assertTrue(Predictor.is_dangerous_label("MALICIOUS", ["BENIGN", "MALICIOUS"]))
         self.assertFalse(Predictor.is_dangerous_label("BENIGN", ["BENIGN", "MALICIOUS"]))

@@ -1,5 +1,5 @@
 {
-  "interface": "eth0",
+  "interface": "enp0s3",
   "pcap_output_dir": "data/pcaps",
   "csv_output_dir": "data/csv",
   "processed_dir": "data/processed",
