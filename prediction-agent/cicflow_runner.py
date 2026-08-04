@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import subprocess
 from pathlib import Path
@@ -5,40 +7,93 @@ from typing import Optional
 
 
 class CICFlowRunner:
-    def __init__(self, config: dict, logger: Optional[logging.Logger] = None):
+    """Run the configured CICFlowMeter command for one completed PCAP."""
+
+    def __init__(self, config: dict, logger: Optional[logging.Logger] = None) -> None:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
 
-    def run(self, pcap_path: str) -> tuple[bool, Optional[str], Optional[Path]]:
+    def _build_command(self, pcap_file: Path, output_dir: Path) -> list[str]:
+        configured = self.config.get("cicflow_command")
+        if not configured or not isinstance(configured, list):
+            raise ValueError("cicflow_command must be a non-empty JSON list")
+
+        command = [
+            str(part)
+            .replace("{pcap}", str(pcap_file.resolve()))
+            .replace("{output_dir}", str(output_dir.resolve()))
+            for part in configured
+        ]
+
+        # Backward compatibility with a base command that has no placeholders.
+        joined = " ".join(str(part) for part in configured)
+        if "{pcap}" not in joined and "{output_dir}" not in joined:
+            command.extend([str(pcap_file.resolve()), "-o", str(output_dir.resolve())])
+
+        return command
+
+    def run(self, pcap_path: str | Path) -> tuple[bool, Optional[str], Optional[Path]]:
         pcap_file = Path(pcap_path)
         if not pcap_file.exists():
-            self.logger.error("PCAP file not found: %s", pcap_file)
-            return False, "PCAP file not found", None
-
-        command = list(self.config.get("cicflow_command", ["java", "-jar", "CICFlowMeter.jar"]))
-        if not command:
-            self.logger.error("CICFlowMeter command is not configured")
-            return False, "CICFlowMeter command is not configured", None
+            message = f"PCAP file not found: {pcap_file}"
+            self.logger.error(message)
+            return False, message, None
+        if pcap_file.stat().st_size == 0:
+            message = f"PCAP file is empty: {pcap_file}"
+            self.logger.error(message)
+            return False, message, None
 
         output_dir = Path(self.config.get("csv_output_dir", "data/csv"))
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_csv = output_dir / f"{pcap_file.stem}.csv"
 
-        command = command + [str(pcap_file), "-o", str(output_dir)]
-        self.logger.info("Running CICFlowMeter for %s", pcap_file)
+        before = {path.resolve() for path in output_dir.rglob("*.csv")}
+
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=self.config.get("http_timeout_seconds", 10))
-        except subprocess.TimeoutExpired as exc:
-            self.logger.error("CICFlowMeter timed out for %s", pcap_file)
+            command = self._build_command(pcap_file, output_dir)
+        except ValueError as exc:
+            self.logger.error("Invalid CICFlowMeter configuration: %s", exc)
             return False, str(exc), None
 
+        self.logger.info("Running CICFlowMeter: %s", command)
+
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=float(self.config.get("cicflow_timeout_seconds", 300)),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            message = f"CICFlowMeter timed out for {pcap_file}: {exc}"
+            self.logger.error(message)
+            return False, message, None
+        except OSError as exc:
+            message = f"Could not start CICFlowMeter: {exc}"
+            self.logger.error(message)
+            return False, message, None
+
         if completed.returncode != 0:
-            self.logger.error("CICFlowMeter failed for %s: %s", pcap_file, completed.stderr.strip())
-            return False, completed.stderr.strip(), None
+            details = completed.stderr.strip() or completed.stdout.strip() or "No error output"
+            message = f"CICFlowMeter failed with code {completed.returncode}: {details}"
+            self.logger.error(message)
+            return False, message, None
 
-        if not output_csv.exists():
-            self.logger.error("Expected CSV output was not created: %s", output_csv)
-            return False, "Expected CSV output was not created", None
+        after = {path.resolve() for path in output_dir.rglob("*.csv")}
+        new_files = [Path(path) for path in after - before]
 
+        if not new_files:
+            expected = output_dir / f"{pcap_file.stem}.csv"
+            if expected.exists():
+                new_files = [expected]
+
+        if not new_files:
+            message = f"CICFlowMeter completed but no new CSV was found in {output_dir}"
+            self.logger.error(message)
+            if completed.stdout.strip():
+                self.logger.info("CICFlowMeter stdout: %s", completed.stdout.strip())
+            return False, message, None
+
+        output_csv = max(new_files, key=lambda path: path.stat().st_mtime)
         self.logger.info("CICFlowMeter created %s", output_csv)
         return True, None, output_csv

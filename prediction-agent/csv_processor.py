@@ -1,54 +1,50 @@
-import json
-import math
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 
 
 class CSVProcessor:
-    def __init__(self, feature_columns: list[str], metadata: dict, logger: Optional[logging.Logger] = None):
-        self.feature_columns = feature_columns
-        self.metadata = metadata
+    """Read CICFlowMeter CSV files and perform file-level cleanup only.
+
+    Model-specific validation, numeric conversion, feature ordering, infinity
+    handling, and imputation are intentionally handled by Predictor so the
+    deployment path matches the training path.
+    """
+
+    def __init__(self, logger: Optional[logging.Logger] = None) -> None:
         self.logger = logger or logging.getLogger(__name__)
 
-    def prepare_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        cleaned = {key.strip(): value for key, value in row.items()}
-        for feature in self.feature_columns:
-            if feature not in cleaned:
-                raise ValueError(f"Missing required feature: {feature}")
-        prepared = {}
-        for feature in self.feature_columns:
-            value = cleaned[feature]
-            if isinstance(value, str):
-                value = value.strip()
-                if value == "":
-                    value = None
-                else:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        value = None
-            elif isinstance(value, (int, float)):
-                value = float(value)
-            prepared[feature] = value
-        for feature, value in list(prepared.items()):
-            if value is None:
-                continue
-            if isinstance(value, float) and (math.isinf(value) or math.isnan(value)):
-                prepared[feature] = None
-        return prepared
-
-    def process_csv(self, csv_path: str) -> list[dict[str, Any]]:
+    def read_csv(self, csv_path: str | Path) -> pd.DataFrame:
         csv_file = Path(csv_path)
-        dataframe = pd.read_csv(csv_file)
-        dataframe.columns = [column.strip() for column in dataframe.columns]
-        dataframe = dataframe.dropna(how="all")
-        if "Label" in dataframe.columns:
-            dataframe = dataframe.drop(columns=["Label"])
-        rows = []
-        for _, row in dataframe.iterrows():
-            cleaned = row.to_dict()
-            rows.append(cleaned)
-        return rows
+
+        if not csv_file.exists():
+            raise FileNotFoundError(f"CSV file not found: {csv_file}")
+        if not csv_file.is_file():
+            raise ValueError(f"CSV path is not a file: {csv_file}")
+
+        dataframe = pd.read_csv(csv_file, low_memory=False)
+        dataframe.columns = [str(column).strip() for column in dataframe.columns]
+        dataframe = dataframe.dropna(how="all").reset_index(drop=True)
+
+        duplicated = dataframe.columns[dataframe.columns.duplicated()].tolist()
+        if duplicated:
+            raise ValueError(f"Duplicate CSV columns detected: {duplicated}")
+
+        # A live CICFlowMeter file normally has no Label column, but dropping it
+        # makes the pipeline safe for labeled test files too.
+        label_columns = [
+            column
+            for column in dataframe.columns
+            if str(column).strip().lower() in {"label", "attack"}
+        ]
+        if label_columns:
+            dataframe = dataframe.drop(columns=label_columns)
+
+        if dataframe.empty:
+            self.logger.warning("CSV file contains no usable rows: %s", csv_file)
+
+        return dataframe

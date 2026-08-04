@@ -6,11 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from alert_sender import AlertSender
+from alert_sender import AlertClient
 from csv_processor import CSVProcessor
 from predictor import Predictor
 from state import StateStore
@@ -18,21 +20,19 @@ from state import StateStore
 
 class TestAgentLogic(unittest.TestCase):
     def test_exact_feature_ordering(self):
-        processor = CSVProcessor(feature_columns=["a", "b", "c"], metadata={})
-        row = {"a": "1", "b": "2", "c": "3"}
-        prepared = processor.prepare_row(row)
-        self.assertEqual(list(prepared.keys()), ["a", "b", "c"])
+        dataframe = pd.DataFrame([{"a": "1", "b": "2", "c": "3"}])
+        prepared = Predictor.prepare_feature_frame_static(dataframe, ["a", "b", "c"])
+        self.assertEqual(list(prepared.columns), ["a", "b", "c"])
 
     def test_missing_feature_rejection(self):
-        processor = CSVProcessor(feature_columns=["a", "b", "c"], metadata={})
-        missing = {"a": "1", "b": "2"}
+        dataframe = pd.DataFrame([{"a": "1", "b": "2"}])
         with self.assertRaises(ValueError):
-            processor.prepare_row(missing)
+            Predictor.prepare_feature_frame_static(dataframe, ["a", "b", "c"])
 
     def test_infinity_handling(self):
-        processor = CSVProcessor(feature_columns=["a"], metadata={"infinity_handling_policy": "replace_inf_with_nan"})
-        prepared = processor.prepare_row({"a": "inf"})
-        self.assertTrue(prepared["a"] is None or prepared["a"] != float("inf"))
+        dataframe = pd.DataFrame([{"a": "inf"}])
+        prepared = Predictor.prepare_feature_frame_static(dataframe, ["a"])
+        self.assertTrue(pd.isna(prepared.iloc[0, 0]))
 
     def test_model_loading(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -49,30 +49,17 @@ class TestAgentLogic(unittest.TestCase):
         self.assertTrue(predictor.is_ready)
 
     def test_dangerous_label_detection(self):
-        self.assertTrue(Predictor.is_dangerous_label("MALICIOUS", ["BENIGN", "MALICIOUS"]))
-        self.assertFalse(Predictor.is_dangerous_label("BENIGN", ["BENIGN", "MALICIOUS"]))
+        predictor = Predictor(model_dir="model")
+        self.assertTrue(predictor.is_dangerous_label("MALICIOUS", ["BENIGN", "MALICIOUS"]))
+        self.assertFalse(predictor.is_dangerous_label("BENIGN", ["BENIGN", "MALICIOUS"]))
 
     def test_confidence_threshold(self):
         self.assertTrue(Predictor.meets_confidence_threshold(0.95, 0.9))
         self.assertFalse(Predictor.meets_confidence_threshold(0.8, 0.9))
 
     def test_successful_alert_sending(self):
-        sender = AlertSender(endpoint_url="http://example.invalid", timeout=1, max_retries=1)
-        self.assertFalse(sender.send_alert({"event_id": "e"}))
-
-    def test_failed_alert_queueing(self):
-        with tempfile.TemporaryDirectory() as tempdir:
-            db_path = Path(tempdir) / "alerts.sqlite"
-            sender = AlertSender(endpoint_url="http://example.invalid", db_path=str(db_path), timeout=1, max_retries=1)
-            self.assertTrue(sender.queue_alert({"event_id": "e"}))
-            self.assertEqual(sender.get_queued_alert_count(), 1)
-
-    def test_retrying_queued_alerts(self):
-        with tempfile.TemporaryDirectory() as tempdir:
-            db_path = Path(tempdir) / "alerts.sqlite"
-            sender = AlertSender(endpoint_url="http://example.invalid", db_path=str(db_path), timeout=1, max_retries=1)
-            sender.queue_alert({"event_id": "e"})
-            self.assertEqual(sender.retry_queued_alerts(), 0)
+        sender = AlertClient({"alert_endpoint_url": "http://example.invalid", "retry_count": 1, "retry_backoff_seconds": 0, "http_timeout_seconds": 1})
+        self.assertFalse(sender.send({"event_id": "e"}))
 
     def test_duplicate_pcap_prevention(self):
         with tempfile.TemporaryDirectory() as tempdir:

@@ -1,154 +1,200 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
+import shutil
+import signal
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+import pandas as pd
 
-from alert_sender import AlertSender
+from alert_sender import AlertClient
 from capture import CaptureManager
 from cicflow_runner import CICFlowRunner
 from csv_processor import CSVProcessor
 from predictor import Predictor
-from state import StateStore
 
 
-def resolve_path(path: str) -> Path:
-    candidate = Path(path)
-    if candidate.is_absolute():
-        return candidate
-    return (PROJECT_ROOT / candidate).resolve()
+class PredictionAgent:
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
+        self.logger = logging.getLogger("prediction_agent")
+        self.capture = CaptureManager(config, self.logger)
+        self.flow_runner = CICFlowRunner(config, self.logger)
+        self.csv_processor = CSVProcessor(self.logger)
+        self.predictor = Predictor(config.get("model_dir", "model"), self.logger)
+        self.alert_client = AlertClient(config, self.logger)
+        self.running = True
 
+        self.pcap_dir = Path(config.get("pcap_output_dir", "data/pcaps"))
+        self.processed_dir = Path(config.get("processed_dir", "data/processed"))
+        self.prediction_dir = self.processed_dir / "predictions"
+        self.archive_pcap_dir = self.processed_dir / "pcaps"
+        self.archive_csv_dir = self.processed_dir / "csv"
 
-def load_config(path: str) -> dict:
-    config_path = resolve_path(path)
-    with config_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        for directory in (
+            self.pcap_dir,
+            self.prediction_dir,
+            self.archive_pcap_dir,
+            self.archive_csv_dir,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
 
+    def stop(self, *_: Any) -> None:
+        self.running = False
+        self.capture.stop()
 
-def configure_logging(level: str) -> logging.Logger:
-    logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
-    return logging.getLogger("prediction-agent")
+    def _completed_pcaps(self) -> list[Path]:
+        files = sorted(
+            (path for path in self.pcap_dir.glob("*.pcap") if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if len(files) <= 1:
+            return []
 
+        # The newest file is assumed to be the file tcpdump is currently writing.
+        candidates = files[:-1]
+        age_required = float(self.config.get("stability_wait_seconds", 3))
+        now = time.time()
+        return [path for path in candidates if now - path.stat().st_mtime >= age_required]
 
-def process_pcap_file(pcap_path: str, config: dict, logger: logging.Logger, state: StateStore, predictor: Predictor, alert_sender: AlertSender) -> bool:
-    if state.is_pcap_processed(pcap_path):
-        logger.info("Skipping already processed PCAP: %s", pcap_path)
-        return True
+    def _archive(self, source: Path, destination_dir: Path) -> Path:
+        destination = destination_dir / source.name
+        if destination.exists():
+            destination = destination_dir / f"{source.stem}_{int(time.time())}{source.suffix}"
+        return Path(shutil.move(str(source), str(destination)))
 
-    runner = CICFlowRunner(config=config, logger=logger)
-    success, error, csv_path = runner.run(pcap_path)
-    if not success or csv_path is None:
-        logger.error("Failed to process PCAP %s: %s", pcap_path, error)
-        return False
+    def _build_alert_payload(self, row: pd.Series, source_csv: Path) -> dict[str, Any]:
+        return {
+            "server_name": self.config.get("server_name", "unknown-server"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source_csv": source_csv.name,
+            "predicted_label": str(row["Predicted Label"]),
+            "confidence": float(row["Prediction Confidence"]),
+            "flow": row.to_dict(),
+        }
 
-    feature_columns = predictor.feature_columns
-    metadata = predictor.metadata
-    processor = CSVProcessor(feature_columns=feature_columns, metadata=metadata, logger=logger)
-    rows = processor.process_csv(str(csv_path))
-    logger.info("Processed CSV %s with %d rows", csv_path, len(rows))
+    def process_pcap(self, pcap_path: Path) -> None:
+        success, error, csv_path = self.flow_runner.run(pcap_path)
+        if not success or csv_path is None:
+            self.logger.error("Skipping %s: %s", pcap_path, error)
+            return
 
-    dangerous_count = 0
-    benign_count = 0
-    sent_count = 0
-    invalid_count = 0
-    for row in rows:
         try:
-            prepared = processor.prepare_row(row)
-        except ValueError as exc:
-            invalid_count += 1
-            logger.warning("Rejected incompatible row: %s", exc)
-            continue
-        label, confidence = predictor.predict(prepared)
-        if predictor.is_dangerous_label(label, config.get("dangerous_labels", [])) and predictor.meets_confidence_threshold(confidence, config.get("minimum_confidence", 0.8)):
-            dangerous_count += 1
-            payload = alert_sender.build_payload(label, confidence, {"server_name": config.get("server_name", "monitored-server-1"), "source_ip": row.get("Source IP") or None, "destination_ip": row.get("Destination IP") or None, "source_port": row.get("Src Port") or None, "destination_port": row.get("Dst Port") or None, "protocol": row.get("Protocol") or None, "flow_duration": row.get("Flow Duration") or None}, predictor.metadata.get("model_version", "unknown"))
-            if alert_sender.send_alert(payload):
-                sent_count += 1
-            else:
-                alert_sender.queue_alert(payload)
-        else:
-            benign_count += 1
-            if config.get("print_benign", False):
-                logger.info("Benign prediction: %s", label)
+            incoming = self.csv_processor.read_csv(csv_path)
+            if incoming.empty:
+                self.logger.warning("No rows to predict in %s", csv_path)
+                self._archive(csv_path, self.archive_csv_dir)
+                self._archive(pcap_path, self.archive_pcap_dir)
+                return
 
-    logger.info("Predictions: benign=%d dangerous=%d invalid=%d sent=%d", benign_count, dangerous_count, invalid_count, sent_count)
-    state.mark_pcap_processed(pcap_path)
-    state.mark_csv_processed(str(csv_path))
-    return True
+            results = self.predictor.predict_dataframe(incoming)
+        except Exception:
+            self.logger.exception("Prediction failed for %s", csv_path)
+            return
+
+        output_name = f"{csv_path.stem}_predictions.csv"
+        output_path = self.prediction_dir / output_name
+        results.to_csv(output_path, index=False)
+        self.logger.info("Saved predictions to %s", output_path)
+
+        minimum_confidence = float(self.config.get("minimum_confidence", 0.8))
+        dangerous_labels = list(self.config.get("dangerous_labels", ["MALICIOUS"]))
+        print_benign = bool(self.config.get("print_benign", False))
+
+        for _, row in results.iterrows():
+            label = str(row["Predicted Label"])
+            confidence = float(row["Prediction Confidence"])
+            dangerous = self.predictor.is_dangerous_label(label, dangerous_labels)
+            confident = self.predictor.meets_confidence_threshold(confidence, minimum_confidence)
+
+            if dangerous and confident:
+                self.logger.warning("Malicious flow detected: label=%s confidence=%.4f", label, confidence)
+                self.alert_client.send(self._build_alert_payload(row, csv_path))
+            elif print_benign:
+                self.logger.info("Flow prediction: label=%s confidence=%.4f", label, confidence)
+
+        self._archive(csv_path, self.archive_csv_dir)
+        self._archive(pcap_path, self.archive_pcap_dir)
+
+    def run(self) -> None:
+        if not self.predictor.is_ready:
+            raise RuntimeError("Predictor artifacts are not ready")
+
+        self.logger.info("Starting capture loop on interface %s", self.config.get("interface", "eth0"))
+        self.capture.start()
+        poll_interval = float(self.config.get("poll_interval_seconds", 5))
+
+        try:
+            while self.running:
+                if self.capture.process is not None and self.capture.process.poll() is not None:
+                    raise RuntimeError(
+                        f"tcpdump exited unexpectedly with code {self.capture.process.returncode}"
+                    )
+
+                for pcap_file in self._completed_pcaps():
+                    self.process_pcap(pcap_file)
+
+                time.sleep(poll_interval)
+        finally:
+            self.capture.stop()
 
 
-def validate_model(config: dict, logger: logging.Logger) -> bool:
-    model_dir = resolve_path(config.get("model_dir", "model"))
-    predictor = Predictor(model_dir=str(model_dir), logger=logger)
-    return predictor.validate()
+def load_config(path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def validate_config(config: dict, logger: logging.Logger) -> bool:
-    required_keys = ["interface", "pcap_output_dir", "csv_output_dir", "processed_dir", "model_dir", "alert_endpoint_url", "dangerous_labels", "minimum_confidence"]
-    missing = [key for key in required_keys if key not in config]
-    if missing:
-        logger.error("Missing config keys: %s", ", ".join(missing))
-        return False
-    logger.info("Configuration is valid")
-    return True
+def configure_logging(level_name: str) -> None:
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Simple network-flow prediction agent")
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--watch", action="store_true")
-    parser.add_argument("--validate-model", action="store_true")
-    parser.add_argument("--validate-config", action="store_true")
-    parser.add_argument("--process-pcap", dest="process_pcap", help="Process one existing PCAP file")
-    parser.add_argument("--process-csv", dest="process_csv", help="Process one existing CSV file")
-    parser.add_argument("--config", default="config.json")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="CICFlowMeter intrusion prediction agent")
+    parser.add_argument("--config", default="config.json", help="Path to config.json")
+    parser.add_argument("--validate-model", action="store_true", help="Validate the model artifacts")
+    parser.add_argument("--validate-config", action="store_true", help="Validate the config file")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    logger = configure_logging(config.get("log_level", "INFO"))
-    logger.info("Loaded configuration from %s", resolve_path(args.config))
+    configure_logging(str(config.get("log_level", "INFO")))
 
     if args.validate_config:
-        sys.exit(0 if validate_config(config, logger) else 1)
+        required = ["interface", "pcap_output_dir", "csv_output_dir", "processed_dir", "model_dir", "alert_endpoint_url"]
+        missing = [name for name in required if not config.get(name)]
+        if missing:
+            logging.getLogger("prediction_agent").error("Missing config values: %s", ", ".join(missing))
+            return 1
+        logging.getLogger("prediction_agent").info("Configuration looks valid")
+        return 0
+
     if args.validate_model:
-        sys.exit(0 if validate_model(config, logger) else 1)
+        predictor = Predictor(config.get("model_dir", "model"), logging.getLogger("prediction_agent"))
+        if predictor.is_ready:
+            logging.getLogger("prediction_agent").info("Model artifacts loaded successfully")
+            return 0
+        logging.getLogger("prediction_agent").error("Model artifacts could not be loaded")
+        return 1
 
-    predictor = Predictor(model_dir=str(resolve_path(config.get("model_dir", "model"))), logger=logger)
-    if not predictor.validate():
-        logger.error("Model artifacts could not be validated")
-        sys.exit(1)
+    agent = PredictionAgent(config)
+    signal.signal(signal.SIGINT, agent.stop)
+    signal.signal(signal.SIGTERM, agent.stop)
 
-    alert_sender = AlertSender(endpoint_url=config.get("alert_endpoint_url", "http://127.0.0.1:8001/alerts"), db_path=str(resolve_path("data/alerts.sqlite")), timeout=config.get("http_timeout_seconds", 3), max_retries=config.get("retry_count", 3), backoff_seconds=config.get("retry_backoff_seconds", 1.0), logger=logger)
-    state = StateStore(db_path=str(resolve_path("data/state.sqlite")))
-
-    if args.process_pcap:
-        process_pcap_file(args.process_pcap, config, logger, state, predictor, alert_sender)
-        return
-    if args.process_csv:
-        csv_path = Path(args.process_csv)
-        processor = CSVProcessor(feature_columns=predictor.feature_columns, metadata=predictor.metadata, logger=logger)
-        rows = processor.process_csv(str(csv_path))
-        logger.info("Processed CSV %s with %d rows", csv_path, len(rows))
-        return
-
-    while True:
-        pcap_dir = resolve_path(config.get("pcap_output_dir", "data/pcaps"))
-        completed_pcaps = []
-        for pcap_path in pcap_dir.glob("*.pcap"):
-            if not state.is_pcap_processed(str(pcap_path)):
-                completed_pcaps.append(str(pcap_path))
-        logger.info("Found %d completed PCAP files", len(completed_pcaps))
-        for pcap_path in completed_pcaps:
-            process_pcap_file(pcap_path, config, logger, state, predictor, alert_sender)
-        alert_sender.retry_queued_alerts()
-        if args.once or not args.watch:
-            break
-        time.sleep(config.get("poll_interval_seconds", 5))
+    try:
+        agent.run()
+    except Exception:
+        logging.getLogger("prediction_agent").exception("Agent stopped because of a fatal error")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

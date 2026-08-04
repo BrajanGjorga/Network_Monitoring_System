@@ -89,7 +89,28 @@ If the install is slow, wait for it to finish. When it is done, you are ready to
 
 ---
 
-## 5. Find the correct network interface
+## 5. After pulling the repository, run this quick checklist
+
+If you just cloned or pulled the project from Git, do these checks before you start the agent:
+
+```bash
+cd ~/prediction-agent
+source .venv/bin/activate
+python agent.py --validate-config
+python agent.py --validate-model
+```
+
+If either command fails, fix the issue before continuing. The most common problems are:
+
+- the interface name in config.json does not match your VM
+- the model files are missing from the model folder
+- CICFlowMeter or Java is not available on the VM
+
+You should also make sure that the model folder contains the exported training artifacts before you start the agent.
+
+---
+
+## 6. Find the correct network interface
 
 The agent needs to know which network interface to capture from.
 
@@ -115,7 +136,7 @@ Use the interface name that is active on your VM.
 
 ---
 
-## 6. Copy the model artifacts into the model folder
+## 7. Copy the model artifacts into the model folder
 
 The agent expects trained model files in the model folder.
 
@@ -149,7 +170,7 @@ If you do not have these files yet, the agent will tell you that the model is mi
 
 ---
 
-## 7. Configure the project
+## 8. Configure the project
 
 Open the configuration file.
 
@@ -184,7 +205,7 @@ If you are not sure about the interface name, use the one from the earlier comma
 
 ---
 
-## 8. Configure CICFlowMeter
+## 9. Configure CICFlowMeter
 
 The agent uses a configurable CICFlowMeter command in the config file.
 
@@ -204,7 +225,7 @@ If you do not have CICFlowMeter installed yet, install it first and make sure th
 
 ---
 
-## 9. Start the local test receiver
+## 10. Start the local test receiver
 
 This is your test endpoint for now.
 
@@ -230,7 +251,7 @@ curl http://127.0.0.1:8001/alerts
 
 ---
 
-## 10. Validate that the configuration is good
+## 11. Validate that the configuration is good
 
 Back in the first terminal, run:
 
@@ -252,43 +273,45 @@ If you see missing artifact errors, go back and copy the model files into the mo
 
 ---
 
-## 11. Run the agent once to test the pipeline
+## 12. Start the agent and test the pipeline
 
-Now try the agent in one-shot mode.
+Start the agent in the main terminal:
 
 ```bash
-python agent.py --once
+cd ~/prediction-agent
+source .venv/bin/activate
+python agent.py
 ```
 
 What should happen:
 
-- The agent looks for PCAP files.
-- It checks for completed files.
+- The agent starts tcpdump on the configured interface.
+- It looks for completed PCAP files in the capture directory.
 - It runs CICFlowMeter if a PCAP is ready.
 - It processes the CSV output.
 - It loads the model and applies the saved preprocessing.
 - It predicts each flow.
 - If a flow is classified as dangerous and above the confidence threshold, it sends an alert to the test endpoint.
 
-You will see logs in the terminal showing what happened.
+The process will keep running until you stop it with Ctrl+C. You will see logs in the terminal showing what happened.
 
 ---
 
-## 12. Run the agent in continuous mode
+## 13. Verify that alerts are reaching the receiver
 
-If you want the agent to keep watching for new PCAP files, run:
+While the receiver is running and the agent is processing traffic, open another terminal and run:
 
 ```bash
-python agent.py --watch
+curl http://127.0.0.1:8001/alerts
 ```
 
-This runs the loop repeatedly. The agent will check the capture directory, process new files, and retry any failed alerts.
+If the agent sent a dangerous alert, you will see the alert JSON in the response.
 
-To stop it, press Ctrl+C in that terminal.
+You can also read the logs from the receiver terminal to confirm the alert was received.
 
 ---
 
-## 13. See what is going on in the logs
+## 14. See what is going on in the logs
 
 The agent uses Python logging. You will see messages such as:
 
@@ -306,20 +329,6 @@ Example:
 ```json
 "log_level": "DEBUG"
 ```
-
----
-
-## 14. Check whether the alert reached the test endpoint
-
-While the receiver is running, open another terminal and run:
-
-```bash
-curl http://127.0.0.1:8001/alerts
-```
-
-If the agent sent a dangerous alert, you will see the alert JSON in the response.
-
-You can also read the logs from the receiver terminal to confirm the alert was received.
 
 ---
 
@@ -378,7 +387,7 @@ cd ~/prediction-agent
 source .venv/bin/activate
 python agent.py --validate-config
 python agent.py --validate-model
-python agent.py --once
+python agent.py
 ```
 
 If you have a valid PCAP and matching model artifacts, the agent should begin processing and eventually send a dangerous alert to the local receiver if the model predicts a dangerous label.
