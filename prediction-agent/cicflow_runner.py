@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -13,10 +14,39 @@ class CICFlowRunner:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
 
+    def _resolve_project_root(self) -> Path:
+        return Path(__file__).resolve().parent
+
+    def _uses_bundled_launcher(self) -> bool:
+        return self.config.get("cicflow_command") == ["java", "-jar", "CICFlowMeter.jar"]
+
+    def _bundled_launcher_dir(self) -> Path:
+        return self._resolve_project_root() / "tools" / "CICFlowMeter-4.0" / "bin"
+
     def _build_command(self, pcap_file: Path, output_dir: Path) -> list[str]:
         configured = self.config.get("cicflow_command")
         if not configured or not isinstance(configured, list):
             raise ValueError("cicflow_command must be a non-empty JSON list")
+
+        if self._uses_bundled_launcher():
+            project_root = self._resolve_project_root()
+            tool_dir = project_root / "tools" / "CICFlowMeter-4.0"
+            jar_path = tool_dir / "lib" / "CICFlowMeter-4.0.jar"
+            if not jar_path.exists():
+                raise ValueError(f"CICFlowMeter jar not found at {jar_path}")
+
+            if os.name == "nt":
+                launcher = tool_dir / "bin" / "cfm.bat"
+                if not launcher.exists():
+                    raise ValueError(f"CICFlowMeter launcher not found at {launcher}")
+                default_command = ["cmd", "/c", str(launcher.resolve())]
+            else:
+                launcher = tool_dir / "bin" / "cfm"
+                if not launcher.exists():
+                    raise ValueError(f"CICFlowMeter launcher not found at {launcher}")
+                default_command = [str(launcher.resolve())]
+            command = default_command + [str(pcap_file.resolve()), str(output_dir.resolve())]
+            return command
 
         command = [
             str(part)
@@ -28,7 +58,8 @@ class CICFlowRunner:
         # Backward compatibility with a base command that has no placeholders.
         joined = " ".join(str(part) for part in configured)
         if "{pcap}" not in joined and "{output_dir}" not in joined:
-            command.extend([str(pcap_file.resolve()), "-o", str(output_dir.resolve())])
+            if not any(part in command for part in ["-r", "-o"]):
+                command.extend([str(pcap_file.resolve()), "-o", str(output_dir.resolve())])
 
         return command
 
@@ -57,12 +88,16 @@ class CICFlowRunner:
         self.logger.info("Running CICFlowMeter: %s", command)
 
         try:
+            env = os.environ.copy()
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 timeout=float(self.config.get("cicflow_timeout_seconds", 300)),
                 check=False,
+                env=env,
+                # The bundled launchers use ../lib/native for jNetPcap.
+                cwd=str(self._bundled_launcher_dir()) if self._uses_bundled_launcher() else None,
             )
         except subprocess.TimeoutExpired as exc:
             message = f"CICFlowMeter timed out for {pcap_file}: {exc}"
@@ -75,6 +110,12 @@ class CICFlowRunner:
 
         if completed.returncode != 0:
             details = completed.stderr.strip() or completed.stdout.strip() or "No error output"
+            if "UnsatisfiedLinkError" in details:
+                details += (
+                    "\nCICFlowMeter could not load its packet-capture native library. "
+                    "Install libpcap on Linux or Npcap in WinPcap-compatible mode on Windows, "
+                    "and verify that the native library matches the JVM architecture."
+                )
             message = f"CICFlowMeter failed with code {completed.returncode}: {details}"
             self.logger.error(message)
             return False, message, None

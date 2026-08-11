@@ -268,34 +268,22 @@ Purpose:
 This file sends alerts to the HTTP endpoint.
 
 What it does:
-- creates a unique event ID
-- builds the JSON payload
 - sends the payload to the configured webhook or endpoint
 - retries failed sends a small number of times
-- stores failed alerts locally in SQLite
-- retries later when the agent runs again
+- adds a bearer token from the configured environment variable when present
+
+The prediction agent creates the event ID and payload. If delivery still fails,
+the agent stores the alert in SQLite and retries it later in bounded batches.
 
 Main class:
 
-- AlertSender
+- AlertClient
 
 Main methods:
 
-- build_payload(prediction, confidence, metadata, model_version)
-  - creates the alert JSON body
-
-- send_alert(payload)
-  - sends the alert with requests
+- send(payload)
+  - sends the alert over HTTP or HTTPS
   - returns True or False depending on success
-
-- queue_alert(payload)
-  - stores a failed alert in the local SQLite queue
-
-- get_queued_alert_count()
-  - returns how many alerts are waiting
-
-- retry_queued_alerts()
-  - tries to send alerts that failed previously
 
 Why it is important:
 Without this file, the agent would classify traffic but would never report dangerous results to an endpoint.

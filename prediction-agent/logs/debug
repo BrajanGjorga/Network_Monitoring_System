@@ -1,0 +1,15 @@
+2026-08-11 11:07:53 DEBUG cic.cs.unb.ca.flow.ui.FlowMonitorPane    java.lang.UnsatisfiedLinkError: com/slytechs/library/NativeLibrary.dlopen(Ljava/lang/String;)J
+2026-08-11 11:07:53 DEBUG cic.cs.unb.ca.flow.ui.FlowMonitorPane    java.lang.UnsatisfiedLinkError: com/slytechs/library/NativeLibrary.dlopen(Ljava/lang/String;)J
+2026-08-11 11:28:35 INFO  cic.cs.unb.ca.ifm.Cmd    You select: C:\Users\bryan\Network_Monitoring_App\prediction-agent\data\pcaps\sample_benign_traffic.pcap
+2026-08-11 11:28:35 INFO  cic.cs.unb.ca.ifm.Cmd    Out folder: -o
+2026-08-11 11:28:37 INFO  cic.cs.unb.ca.ifm.Cmd    CICFlowMeter received 1 pcap file
+2026-08-11 11:35:37 INFO  cic.cs.unb.ca.ifm.Cmd    The pcap file or folder does not exist! -> -r
+2026-08-11 11:35:50 INFO  cic.cs.unb.ca.ifm.Cmd    The pcap file or folder does not exist! -> -r
+2026-08-11 11:36:30 INFO  cic.cs.unb.ca.ifm.Cmd    The pcap file or folder does not exist! -> -r
+2026-08-11 11:36:42 INFO  cic.cs.unb.ca.ifm.Cmd    The pcap file or folder does not exist! -> --help
+2026-08-11 11:45:38 INFO  cic.cs.unb.ca.ifm.Cmd    You select: C:\Users\bryan\Network_Monitoring_App\prediction-agent\data\pcaps\sample_benign_traffic.pcap
+2026-08-11 11:45:38 INFO  cic.cs.unb.ca.ifm.Cmd    Out folder: C:\Users\bryan\Network_Monitoring_App\prediction-agent\data\csv
+2026-08-11 11:45:40 INFO  cic.cs.unb.ca.ifm.Cmd    CICFlowMeter received 1 pcap file
+2026-08-11 11:57:35 INFO  cic.cs.unb.ca.ifm.Cmd    You select: C:\Users\bryan\AppData\Local\Temp\network-monitor-e2e-bee89f57ca6b47728591b727e6924947\input\sample_benign_traffic.pcap
+2026-08-11 11:57:35 INFO  cic.cs.unb.ca.ifm.Cmd    Out folder: C:\Users\bryan\AppData\Local\Temp\network-monitor-e2e-bee89f57ca6b47728591b727e6924947\csv
+2026-08-11 11:57:36 INFO  cic.cs.unb.ca.ifm.Cmd    CICFlowMeter received 1 pcap file

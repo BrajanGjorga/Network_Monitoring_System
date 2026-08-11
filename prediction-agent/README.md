@@ -16,6 +16,70 @@ The goal is simple:
 
 > The project already includes a small local test receiver. You do not need to create your own endpoint yet.
 
+## Production readiness and required host setup
+
+The Python agent keeps the same pipeline:
+
+```text
+tcpdump -> PCAP -> CICFlowMeter -> CSV -> model -> HTTP alert
+```
+
+The repository now validates and reports processing failures, persists failed
+alerts in SQLite, retries them in bounded batches, processes the final PCAP when
+capture stops, and returns a nonzero exit code when `--process-pcap` fails.
+
+The following host-level work cannot be performed by the Python application and
+must be completed on the deployment machine:
+
+1. Use a Python 3.13 environment. The exported model was created with Python
+   3.13.2 and scikit-learn 1.9.0, and `requirements.txt` pins the tested direct
+   dependencies.
+2. On Ubuntu, install the packet capture and Java runtimes:
+
+   ```bash
+   sudo apt update
+   sudo apt install -y python3-venv tcpdump default-jre-headless
+   ```
+
+   The Ubuntu `tcpdump` package installs the libpcap runtime it depends on.
+3. Grant the service account permission to capture traffic. Prefer Linux service
+   capabilities (`CAP_NET_RAW` and `CAP_NET_ADMIN`) over running the entire agent
+   as root. Coordinate this with whoever manages the server's security policy.
+4. Put the exported model files in `model/` and ensure the bundled
+   `tools/CICFlowMeter-4.0` directory is included in the deployed release. These
+   large artifacts are not currently tracked by Git.
+5. Set the real interface and HTTPS alert URL in `config.json`. If the endpoint
+   requires a bearer token, place it in the environment variable named by
+   `alert_auth_token_env` (default: `PREDICTION_AGENT_ALERT_TOKEN`); do not commit
+   the token to `config.json`.
+6. Make the Unix launcher executable and run the complete readiness check:
+
+   ```bash
+   chmod +x tools/CICFlowMeter-4.0/bin/cfm
+   python agent.py --validate-config
+   python agent.py --validate-model
+   python agent.py --validate-runtime
+   ```
+
+7. Test a copy of the sample PCAP because successful inputs are archived:
+
+   ```bash
+   cp data/pcaps/sample_benign_traffic.pcap /tmp/sample_benign_traffic.pcap
+   python agent.py --process-pcap /tmp/sample_benign_traffic.pcap
+   echo $?
+   ```
+
+   Exit status `0` means the PCAP reached prediction and archival. Any conversion
+   or prediction failure returns `1`.
+
+For PCAP-only testing on Windows, install Npcap with WinPcap API-compatible mode
+and use a JVM with the same architecture as the bundled native DLL. Continuous
+capture is designed for Ubuntu and still requires `tcpdump` there.
+
+Before production launch, also configure log rotation and retention for archived
+PCAP, CSV, prediction, and SQLite files; the agent deliberately does not delete
+security evidence automatically.
+
 ---
 
 ## 1. Prepare the Ubuntu VM

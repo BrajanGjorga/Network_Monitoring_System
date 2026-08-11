@@ -3,12 +3,14 @@
   "pcap_output_dir": "data/pcaps",
   "csv_output_dir": "data/csv",
   "processed_dir": "data/processed",
+  "state_db_path": "data/state.sqlite",
   "max_pcap_size_mb": 100,
   "rotation_seconds": 30,
   "cicflow_command": ["java", "-jar", "CICFlowMeter.jar"],
   "java_executable": "java",
   "model_dir": "model",
   "alert_endpoint_url": "http://127.0.0.1:8001/alerts",
+  "alert_auth_token_env": "PREDICTION_AGENT_ALERT_TOKEN",
   "http_timeout_seconds": 3,
   "dangerous_labels": ["MALICIOUS", "Attack"],
   "minimum_confidence": 0.8,
@@ -17,6 +19,8 @@
   "stability_wait_seconds": 3,
   "retry_count": 3,
   "retry_backoff_seconds": 1.0,
+  "alert_queue_retry_interval_seconds": 60,
+  "alert_queue_retry_batch_size": 10,
   "poll_interval_seconds": 5,
   "server_name": "monitored-server-1"
 }

@@ -32,12 +32,16 @@ class CaptureManager:
             output_pattern,
             "-G",
             str(int(self.config.get("rotation_seconds", 30))),
-            "-W",
-            str(int(self.config.get("maximum_capture_files", 100))),
             "-s",
             str(int(self.config.get("snaplen", 0))),
             "-U",
         ]
+
+        max_size_mb = int(self.config.get("max_pcap_size_mb", 0))
+        if max_size_mb > 0:
+            # With -G and -C tcpdump may append a counter after .pcap; the
+            # agent intentionally discovers both *.pcap and *.pcap* files.
+            command.extend(["-C", str(max_size_mb)])
 
         capture_filter = self.config.get("capture_filter")
         if capture_filter:

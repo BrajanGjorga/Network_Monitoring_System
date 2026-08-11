@@ -1,0 +1,6 @@
+2026-08-11 11:57:56 INFO  cic.cs.unb.ca.ifm.Cmd    You select: C:\Users\bryan\AppData\Local\Temp\network-monitor-e2e-bee89f57ca6b47728591b727e6924947\input\sample_benign_traffic.pcap
+2026-08-11 11:57:56 INFO  cic.cs.unb.ca.ifm.Cmd    Out folder: C:\Users\bryan\AppData\Local\Temp\network-monitor-e2e-bee89f57ca6b47728591b727e6924947\manual-csv
+2026-08-11 11:57:57 INFO  cic.cs.unb.ca.ifm.Cmd    CICFlowMeter received 1 pcap file
+2026-08-11 12:26:45 INFO  cic.cs.unb.ca.ifm.Cmd    You select: C:\Users\bryan\AppData\Local\Temp\network-monitor-fixed-e2e-fc606d59a2984f5a869f1e970561a3ed\input\sample_benign_traffic.pcap
+2026-08-11 12:26:45 INFO  cic.cs.unb.ca.ifm.Cmd    Out folder: C:\Users\bryan\AppData\Local\Temp\network-monitor-fixed-e2e-fc606d59a2984f5a869f1e970561a3ed\csv
+2026-08-11 12:26:46 INFO  cic.cs.unb.ca.ifm.Cmd    CICFlowMeter received 1 pcap file

@@ -16,7 +16,9 @@ class AlertPayload(BaseModel):
     server_name: str | None = None
     timestamp: str | None = None
     prediction: str | None = None
+    predicted_label: str | None = None
     confidence: float | None = None
+    source_csv: str | None = None
     source_ip: str | None = None
     destination_ip: str | None = None
     source_port: int | None = None
@@ -24,6 +26,7 @@ class AlertPayload(BaseModel):
     protocol: str | None = None
     flow_duration: float | None = None
     model_version: str | None = None
+    flow: Dict | None = None
 
 
 @app.post("/alerts")

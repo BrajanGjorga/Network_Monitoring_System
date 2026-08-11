@@ -95,7 +95,7 @@ class StateStore:
         try:
             conn.execute(
                 "INSERT INTO alerts(event_id, payload, created_at, error, attempts) VALUES (?, ?, datetime('now'), ?, 0)",
-                (event_id, json.dumps(payload), error),
+                (event_id, json.dumps(payload, default=self._json_default), error),
             )
             conn.commit()
             return True
@@ -103,6 +103,12 @@ class StateStore:
             return False
         finally:
             conn.close()
+
+    @staticmethod
+    def _json_default(value):
+        if hasattr(value, "item"):
+            return value.item()
+        return str(value)
 
     def get_queued_alerts(self) -> list[dict]:
         conn = self._connect()

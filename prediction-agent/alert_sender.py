@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
@@ -26,10 +27,15 @@ class AlertClient:
             return False
 
         body = json.dumps(payload, default=self._json_default).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        token_env = str(self.config.get("alert_auth_token_env", "PREDICTION_AGENT_ALERT_TOKEN"))
+        auth_token = os.environ.get(token_env, "").strip()
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
         request = Request(
             endpoint,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
 

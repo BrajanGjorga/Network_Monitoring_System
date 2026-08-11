@@ -4,8 +4,12 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from alert_sender import AlertClient
+from agent import PredictionAgent
+from cicflow_runner import CICFlowRunner
+from capture import CaptureManager
 from csv_processor import CSVProcessor
 from predictor import Predictor
 from state import StateStore
@@ -57,9 +64,21 @@ class TestAgentLogic(unittest.TestCase):
         self.assertTrue(Predictor.meets_confidence_threshold(0.95, 0.9))
         self.assertFalse(Predictor.meets_confidence_threshold(0.8, 0.9))
 
-    def test_successful_alert_sending(self):
+    def test_failed_alert_sending_returns_false(self):
         sender = AlertClient({"alert_endpoint_url": "http://example.invalid", "retry_count": 1, "retry_backoff_seconds": 0, "http_timeout_seconds": 1})
-        self.assertFalse(sender.send({"event_id": "e"}))
+        with patch("alert_sender.urlopen", side_effect=URLError("offline")):
+            self.assertFalse(sender.send({"event_id": "e"}))
+
+    def test_alert_sender_uses_bearer_token_from_environment(self):
+        sender = AlertClient({"alert_endpoint_url": "https://alerts.example/api", "retry_count": 1})
+        response_context = MagicMock()
+        response_context.__enter__.return_value.status = 202
+        with patch.dict(os.environ, {"PREDICTION_AGENT_ALERT_TOKEN": "secret"}):
+            with patch("alert_sender.urlopen", return_value=response_context) as mock_urlopen:
+                self.assertTrue(sender.send({"event_id": "e"}))
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer secret")
 
     def test_duplicate_pcap_prevention(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -67,6 +86,62 @@ class TestAgentLogic(unittest.TestCase):
             store = StateStore(db_path=str(db_path))
             self.assertTrue(store.mark_pcap_processed("foo.pcap"))
             self.assertFalse(store.mark_pcap_processed("foo.pcap"))
+
+    def test_default_cicflow_command_uses_bundled_launcher(self):
+        runner = CICFlowRunner({"cicflow_command": ["java", "-jar", "CICFlowMeter.jar"]})
+        command = runner._build_command(Path("data/pcaps/sample.pcap"), Path("data/csv"))
+
+        self.assertEqual(command[0], "cmd")
+        self.assertEqual(command[1], "/c")
+        self.assertIn("cfm.bat", command[2])
+        self.assertEqual(command[3], str((Path("data/pcaps/sample.pcap")).resolve()))
+        self.assertEqual(command[4], str((Path("data/csv")).resolve()))
+        self.assertEqual(runner._bundled_launcher_dir().name, "bin")
+
+    def test_custom_cicflow_command_does_not_require_bundled_tool(self):
+        runner = CICFlowRunner(
+            {"cicflow_command": ["custom-cfm", "{pcap}", "{output_dir}"]}
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            runner._resolve_project_root = lambda: Path(tempdir) / "missing-project"
+            command = runner._build_command(Path("sample.pcap"), Path("csv"))
+
+        self.assertEqual(command[0], "custom-cfm")
+        self.assertEqual(command[1], str(Path("sample.pcap").resolve()))
+        self.assertEqual(command[2], str(Path("csv").resolve()))
+
+    def test_capture_command_enforces_size_rotation(self):
+        manager = CaptureManager({"max_pcap_size_mb": 25})
+        command = manager.build_command()
+        self.assertEqual(command[command.index("-C") + 1], "25")
+        self.assertNotIn("-W", command)
+
+    def test_alert_payload_matches_receiver_contract(self):
+        from test_receiver import AlertPayload
+
+        agent = PredictionAgent.__new__(PredictionAgent)
+        agent.config = {"server_name": "test-server"}
+        agent.predictor = SimpleNamespace(metadata={"model_version": "1.2.3"})
+        row = pd.Series({"Predicted Label": "MALICIOUS", "Prediction Confidence": 0.99})
+
+        payload = agent._build_alert_payload(row, Path("flows.csv"))
+        validated = AlertPayload(**payload)
+
+        self.assertTrue(validated.event_id)
+        self.assertEqual(validated.prediction, "MALICIOUS")
+        self.assertEqual(validated.model_version, "1.2.3")
+
+    def test_queued_alerts_are_retried_and_removed(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            agent = PredictionAgent.__new__(PredictionAgent)
+            agent.state = StateStore(db_path=str(Path(tempdir) / "state.sqlite"))
+            agent.alert_client = MagicMock()
+            agent.alert_client.send.return_value = True
+            agent.logger = MagicMock()
+            self.assertTrue(agent.state.queue_alert({"event_id": "e-1", "value": np.int64(4)}))
+
+            self.assertEqual(agent.retry_queued_alerts(), (1, 0))
+            self.assertEqual(agent.state.get_alert_count(), 0)
 
     def test_completed_file_detection(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -79,6 +154,17 @@ class TestAgentLogic(unittest.TestCase):
             os.utime(completed, (2, 2))
             detected = [p.name for p in sorted(base.glob("*.pcap")) if p.name != "active.pcap"]
             self.assertIn("done.pcap", detected)
+
+    def test_final_single_pcap_is_detected_after_capture_stops(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            agent = PredictionAgent.__new__(PredictionAgent)
+            agent.pcap_dir = Path(tempdir)
+            agent.config = {"stability_wait_seconds": 3}
+            final_capture = agent.pcap_dir / "capture.pcap"
+            final_capture.write_bytes(b"pcap")
+
+            self.assertEqual(agent._completed_pcaps(), [])
+            self.assertEqual(agent._completed_pcaps(include_newest=True), [final_capture])
 
 
 if __name__ == "__main__":
