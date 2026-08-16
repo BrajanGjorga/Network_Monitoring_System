@@ -10,6 +10,61 @@ import numpy as np
 import pandas as pd
 
 
+# CICFlowMeter 4.0 uses longer column names than the CIC-IDS2018 CSV files
+# used to train this model. Map only known aliases; unknown columns are left
+# untouched so missing or incompatible features still fail validation below.
+CICFLOWMETER_4_COLUMN_MAP = {
+    "Total Fwd Packet": "Tot Fwd Pkts",
+    "Total Bwd packets": "Tot Bwd Pkts",
+    "Total Length of Fwd Packet": "TotLen Fwd Pkts",
+    "Total Length of Bwd Packet": "TotLen Bwd Pkts",
+    "Fwd Packet Length Max": "Fwd Pkt Len Max",
+    "Fwd Packet Length Min": "Fwd Pkt Len Min",
+    "Fwd Packet Length Mean": "Fwd Pkt Len Mean",
+    "Fwd Packet Length Std": "Fwd Pkt Len Std",
+    "Bwd Packet Length Max": "Bwd Pkt Len Max",
+    "Bwd Packet Length Min": "Bwd Pkt Len Min",
+    "Bwd Packet Length Mean": "Bwd Pkt Len Mean",
+    "Bwd Packet Length Std": "Bwd Pkt Len Std",
+    "Flow Bytes/s": "Flow Byts/s",
+    "Flow Packets/s": "Flow Pkts/s",
+    "Fwd IAT Total": "Fwd IAT Tot",
+    "Bwd IAT Total": "Bwd IAT Tot",
+    "Fwd Header Length": "Fwd Header Len",
+    "Bwd Header Length": "Bwd Header Len",
+    "Fwd Packets/s": "Fwd Pkts/s",
+    "Bwd Packets/s": "Bwd Pkts/s",
+    "Packet Length Min": "Pkt Len Min",
+    "Packet Length Max": "Pkt Len Max",
+    "Packet Length Mean": "Pkt Len Mean",
+    "Packet Length Std": "Pkt Len Std",
+    "Packet Length Variance": "Pkt Len Var",
+    "FIN Flag Count": "FIN Flag Cnt",
+    "SYN Flag Count": "SYN Flag Cnt",
+    "RST Flag Count": "RST Flag Cnt",
+    "PSH Flag Count": "PSH Flag Cnt",
+    "ACK Flag Count": "ACK Flag Cnt",
+    "URG Flag Count": "URG Flag Cnt",
+    "CWR Flag Count": "CWE Flag Count",
+    "ECE Flag Count": "ECE Flag Cnt",
+    "Average Packet Size": "Pkt Size Avg",
+    "Fwd Segment Size Avg": "Fwd Seg Size Avg",
+    "Bwd Segment Size Avg": "Bwd Seg Size Avg",
+    "Fwd Bytes/Bulk Avg": "Fwd Byts/b Avg",
+    "Fwd Packet/Bulk Avg": "Fwd Pkts/b Avg",
+    "Fwd Bulk Rate Avg": "Fwd Blk Rate Avg",
+    "Bwd Bytes/Bulk Avg": "Bwd Byts/b Avg",
+    "Bwd Packet/Bulk Avg": "Bwd Pkts/b Avg",
+    "Bwd Bulk Rate Avg": "Bwd Blk Rate Avg",
+    "Subflow Fwd Packets": "Subflow Fwd Pkts",
+    "Subflow Fwd Bytes": "Subflow Fwd Byts",
+    "Subflow Bwd Packets": "Subflow Bwd Pkts",
+    "Subflow Bwd Bytes": "Subflow Bwd Byts",
+    "FWD Init Win Bytes": "Init Fwd Win Byts",
+    "Bwd Init Win Bytes": "Init Bwd Win Byts",
+}
+
+
 class Predictor:
     """Load exported artifacts and perform batch predictions safely."""
 
@@ -105,12 +160,34 @@ class Predictor:
         return cleaned
 
     @staticmethod
+    def _map_cicflowmeter_columns(
+        dataframe: pd.DataFrame, feature_columns: Sequence[str]
+    ) -> pd.DataFrame:
+        """Rename known CICFlowMeter 4.0 columns to the training schema."""
+        canonical_by_name = {str(column).casefold(): str(column) for column in feature_columns}
+        aliases_by_name = {
+            source.casefold(): target
+            for source, target in CICFLOWMETER_4_COLUMN_MAP.items()
+        }
+
+        mapped = dataframe.copy()
+        mapped.columns = [
+            canonical_by_name.get(
+                str(column).casefold(),
+                aliases_by_name.get(str(column).casefold(), str(column)),
+            )
+            for column in mapped.columns
+        ]
+        return mapped
+
+    @staticmethod
     def prepare_feature_frame_static(dataframe: pd.DataFrame, feature_columns: Sequence[str]) -> pd.DataFrame:
         """Prepare a feature frame without requiring an initialized predictor instance."""
         if dataframe.empty:
             raise ValueError("The incoming dataframe contains no rows")
 
         cleaned = Predictor._clean_column_names(dataframe)
+        cleaned = Predictor._map_cicflowmeter_columns(cleaned, feature_columns)
 
         duplicated = cleaned.columns[cleaned.columns.duplicated()].tolist()
         if duplicated:
