@@ -4,6 +4,7 @@ import argparse
 import ctypes.util
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import shutil
 import signal
@@ -234,6 +235,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
         "processed_dir",
         "model_dir",
         "state_db_path",
+        "log_dir",
     ):
         value = config.get(key)
         if value and not Path(value).is_absolute():
@@ -241,11 +243,33 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return config
 
 
-def configure_logging(level_name: str) -> None:
+def configure_logging(
+    level_name: str,
+    log_dir: str | Path = "logs",
+    max_bytes: int = 15 * 1024 * 1024,
+    backup_count: int = 5,
+) -> None:
     level = getattr(logging, level_name.upper(), logging.INFO)
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    )
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    file_handler = RotatingFileHandler(
+        log_path / "agent.log",
+        maxBytes=max(1, int(max_bytes)),
+        backupCount=max(1, int(backup_count)),
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+
     logging.basicConfig(
         level=level,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=[console_handler, file_handler],
+        force=True,
     )
 
 
@@ -333,7 +357,12 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    configure_logging(str(config.get("log_level", "INFO")))
+    configure_logging(
+        str(config.get("log_level", "INFO")),
+        config.get("log_dir", "logs"),
+        int(config.get("log_max_bytes", 15 * 1024 * 1024)),
+        int(config.get("log_backup_count", 5)),
+    )
 
     if args.validate_config:
         errors = validate_config_values(config)
