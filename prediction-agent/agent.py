@@ -90,6 +90,10 @@ class PredictionAgent:
             "prediction": str(row["Predicted Label"]),
             "predicted_label": str(row["Predicted Label"]),
             "confidence": float(row["Prediction Confidence"]),
+            "source_ip": str(row["Src IP"]),
+            "source_port": int(row["Src Port"]),
+            "destination_ip": str(row["Dst IP"]),
+            "flow_duration": float(row["Flow Duration"]),
             "model_version": self.predictor.metadata.get("model_version"),
             "flow": row.to_dict(),
         }

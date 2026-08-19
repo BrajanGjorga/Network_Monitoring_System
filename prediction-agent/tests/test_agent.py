@@ -159,13 +159,26 @@ class TestAgentLogic(unittest.TestCase):
         agent = PredictionAgent.__new__(PredictionAgent)
         agent.config = {"server_name": "test-server"}
         agent.predictor = SimpleNamespace(metadata={"model_version": "1.2.3"})
-        row = pd.Series({"Predicted Label": "MALICIOUS", "Prediction Confidence": 0.99})
+        row = pd.Series(
+            {
+                "Src IP": "10.0.2.15",
+                "Src Port": 46889,
+                "Dst IP": "172.236.195.26",
+                "Flow Duration": 41555,
+                "Predicted Label": "MALICIOUS",
+                "Prediction Confidence": 0.99,
+            }
+        )
 
         payload = agent._build_alert_payload(row, Path("flows.csv"))
         validated = AlertPayload(**payload)
 
         self.assertTrue(validated.event_id)
         self.assertEqual(validated.prediction, "MALICIOUS")
+        self.assertEqual(validated.source_ip, "10.0.2.15")
+        self.assertEqual(validated.source_port, 46889)
+        self.assertEqual(validated.destination_ip, "172.236.195.26")
+        self.assertEqual(validated.flow_duration, 41555.0)
         self.assertEqual(validated.model_version, "1.2.3")
 
     def test_queued_alerts_are_retried_and_removed(self):
