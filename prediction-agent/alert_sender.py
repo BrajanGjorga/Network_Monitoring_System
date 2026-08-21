@@ -10,6 +10,8 @@ from urllib.request import Request, urlopen
 
 
 class AlertClient:
+    API_TOKEN_ENV = "PREDICTION_AGENT_API_TOKEN"
+
     def __init__(self, config: dict, logger: Optional[logging.Logger] = None) -> None:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
@@ -26,12 +28,19 @@ class AlertClient:
             self.logger.warning("No alert_endpoint_url configured; alert not sent")
             return False
 
+        auth_token = os.environ.get(self.API_TOKEN_ENV, "").strip()
+        if not auth_token:
+            self.logger.error(
+                "Missing required %s environment variable; alert not sent",
+                self.API_TOKEN_ENV,
+            )
+            return False
+
         body = json.dumps(payload, default=self._json_default).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        token_env = str(self.config.get("alert_auth_token_env", "PREDICTION_AGENT_ALERT_TOKEN"))
-        auth_token = os.environ.get(token_env, "").strip()
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+        }
         request = Request(
             endpoint,
             data=body,

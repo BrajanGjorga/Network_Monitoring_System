@@ -1,3 +1,4 @@
 model/*
 !model/.gitkeep
 logs/agent.log*
+.env

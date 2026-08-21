@@ -293,6 +293,11 @@ def validate_config_values(config: dict[str, Any]) -> list[str]:
     if endpoint and not endpoint.startswith(("http://", "https://")):
         errors.append("alert_endpoint_url must use http:// or https://")
 
+    if not os.environ.get("PREDICTION_AGENT_API_TOKEN", "").strip():
+        errors.append(
+            "Missing required PREDICTION_AGENT_API_TOKEN environment variable"
+        )
+
     try:
         confidence = float(config.get("minimum_confidence", 0.8))
         if not 0 <= confidence <= 1:

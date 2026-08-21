@@ -103,19 +103,28 @@ class TestAgentLogic(unittest.TestCase):
 
     def test_failed_alert_sending_returns_false(self):
         sender = AlertClient({"alert_endpoint_url": "http://example.invalid", "retry_count": 1, "retry_backoff_seconds": 0, "http_timeout_seconds": 1})
-        with patch("alert_sender.urlopen", side_effect=URLError("offline")):
-            self.assertFalse(sender.send({"event_id": "e"}))
+        with patch.dict(os.environ, {"PREDICTION_AGENT_API_TOKEN": "test-token"}):
+            with patch("alert_sender.urlopen", side_effect=URLError("offline")):
+                self.assertFalse(sender.send({"event_id": "e"}))
 
     def test_alert_sender_uses_bearer_token_from_environment(self):
         sender = AlertClient({"alert_endpoint_url": "https://alerts.example/api", "retry_count": 1})
         response_context = MagicMock()
         response_context.__enter__.return_value.status = 202
-        with patch.dict(os.environ, {"PREDICTION_AGENT_ALERT_TOKEN": "secret"}):
+        with patch.dict(os.environ, {"PREDICTION_AGENT_API_TOKEN": "secret"}):
             with patch("alert_sender.urlopen", return_value=response_context) as mock_urlopen:
                 self.assertTrue(sender.send({"event_id": "e"}))
 
         request = mock_urlopen.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+
+    def test_alert_sender_rejects_missing_api_token(self):
+        sender = AlertClient({"alert_endpoint_url": "https://alerts.example/api"})
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("alert_sender.urlopen") as mock_urlopen:
+                self.assertFalse(sender.send({"event_id": "e"}))
+
+        mock_urlopen.assert_not_called()
 
     def test_duplicate_pcap_prevention(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -192,6 +201,26 @@ class TestAgentLogic(unittest.TestCase):
 
             self.assertEqual(agent.retry_queued_alerts(), (1, 0))
             self.assertEqual(agent.state.get_alert_count(), 0)
+
+    def test_queued_alert_retry_sends_authorization_header(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            agent = PredictionAgent.__new__(PredictionAgent)
+            agent.config = {"alert_queue_retry_interval_seconds": 0}
+            agent.state = StateStore(db_path=str(Path(tempdir) / "state.sqlite"))
+            agent.alert_client = AlertClient(
+                {"alert_endpoint_url": "https://alerts.example/api", "retry_count": 1}
+            )
+            agent.logger = MagicMock()
+            self.assertTrue(agent.state.queue_alert({"event_id": "queued-event"}))
+            response_context = MagicMock()
+            response_context.__enter__.return_value.status = 202
+
+            with patch.dict(os.environ, {"PREDICTION_AGENT_API_TOKEN": "queue-secret"}):
+                with patch("alert_sender.urlopen", return_value=response_context) as mock_urlopen:
+                    self.assertEqual(agent.retry_queued_alerts(force=True), (1, 0))
+
+            request = mock_urlopen.call_args.args[0]
+            self.assertEqual(request.get_header("Authorization"), "Bearer queue-secret")
 
     def test_completed_file_detection(self):
         with tempfile.TemporaryDirectory() as tempdir:

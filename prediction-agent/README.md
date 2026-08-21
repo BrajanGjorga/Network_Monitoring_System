@@ -48,10 +48,10 @@ must be completed on the deployment machine:
 4. Put the exported model files in `model/` and ensure the bundled
    `tools/CICFlowMeter-4.0` directory is included in the deployed release. These
    large artifacts are not currently tracked by Git.
-5. Set the real interface and HTTPS alert URL in `config.json`. If the endpoint
-   requires a bearer token, place it in the environment variable named by
-   `alert_auth_token_env` (default: `PREDICTION_AGENT_ALERT_TOKEN`); do not commit
-   the token to `config.json`.
+5. Register this monitored server in alert-dashboard, copy its one-time API
+   token, and set it as `PREDICTION_AGENT_API_TOKEN` in the service environment.
+   Set the real interface and dashboard `/api/alerts` URL in `config.json`.
+   Never put the token in `config.json` or commit it to source control.
 6. Make the Unix launcher executable and run the complete readiness check:
 
    ```bash
@@ -246,7 +246,7 @@ You should update at least these fields:
 
 - interface: change it to your VM interface name, for example "ens3"
 - model_dir: keep it as "model"
-- alert_endpoint_url: leave it as the local test receiver address unless you want to use another endpoint
+- alert_endpoint_url: use the alert-dashboard `/api/alerts` endpoint; use `/alerts` only with the development test receiver
 - dangerous_labels: keep the default values for now
 - minimum_confidence: keep it at 0.8 or adjust it if you want a lower threshold
 
@@ -259,13 +259,24 @@ Example values:
   "csv_output_dir": "data/csv",
   "processed_dir": "data/processed",
   "model_dir": "model",
-  "alert_endpoint_url": "http://127.0.0.1:8001/alerts",
+  "alert_endpoint_url": "http://dashboard-server:8001/api/alerts",
   "dangerous_labels": ["MALICIOUS", "Attack"],
   "minimum_confidence": 0.8
 }
 ```
 
 If you are not sure about the interface name, use the one from the earlier command.
+
+Set the one-time token generated for this server before validation or startup:
+
+```bash
+export PREDICTION_AGENT_API_TOKEN='paste-the-generated-server-token-here'
+```
+
+For a system service, put the variable in its protected environment file. The
+same variable is used for immediate alert delivery and queued-alert retries. If
+it is missing, validation reports an error and the sender refuses to make an
+unauthenticated request.
 
 ---
 
@@ -292,6 +303,11 @@ If you do not have CICFlowMeter installed yet, install it first and make sure th
 ## 10. Start the local test receiver
 
 This is your test endpoint for now.
+
+The bundled receiver uses `/alerts` rather than the production dashboard route.
+Temporarily set `alert_endpoint_url` to `http://127.0.0.1:8001/alerts`. The sender
+still requires `PREDICTION_AGENT_API_TOKEN`; any non-empty test value is enough
+because this development-only receiver does not validate it.
 
 Open a new terminal and go to the project folder.
 

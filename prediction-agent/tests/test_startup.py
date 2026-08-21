@@ -8,11 +8,30 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent import configure_logging, load_config, main
+from agent import configure_logging, load_config, main, validate_config_values
 from capture import CaptureManager
 
 
 class AgentStartupTests(unittest.TestCase):
+    def test_missing_api_token_is_a_configuration_error(self) -> None:
+        config = {
+            "interface": "eth0",
+            "pcap_output_dir": "data/pcaps",
+            "csv_output_dir": "data/csv",
+            "processed_dir": "data/processed",
+            "model_dir": "model",
+            "alert_endpoint_url": "http://127.0.0.1:8001/api/alerts",
+            "cicflow_command": ["java", "-jar", "CICFlowMeter.jar"],
+        }
+
+        with patch.dict("os.environ", {}, clear=True):
+            errors = validate_config_values(config)
+
+        self.assertIn(
+            "Missing required PREDICTION_AGENT_API_TOKEN environment variable",
+            errors,
+        )
+
     def test_relative_paths_are_resolved_from_config_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.json"
@@ -59,8 +78,9 @@ class AgentStartupTests(unittest.TestCase):
             }
             config_path.write_text(json.dumps(config), encoding="utf-8")
 
-            with patch.object(sys, "argv", ["agent.py", "--config", str(config_path), "--validate-config"]):
-                self.assertEqual(main(), 0)
+            with patch.dict("os.environ", {"PREDICTION_AGENT_API_TOKEN": "test-token"}):
+                with patch.object(sys, "argv", ["agent.py", "--config", str(config_path), "--validate-config"]):
+                    self.assertEqual(main(), 0)
 
     def test_capture_manager_wraps_missing_tcpdump(self) -> None:
         manager = CaptureManager({})
